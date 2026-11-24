@@ -1,0 +1,8 @@
+node_modules/
+*.sqlite*
+*.jsonl.zstd
+eval/
+_backup/
+*.log
+*.tmp
+.DS_Store

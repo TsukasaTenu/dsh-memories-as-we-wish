@@ -1,0 +1,10 @@
+# dsh-memories-as-we-wish bundle 补丁
+- insert:
+    - id: dsh-memories-as-we-wish
+      name: dsh-memories-as-we-wish
+      config:
+        enabled: true
+        indexOnTurnStop: true
+        gateThreshold: 0.55
+        # 可选：检索实体词表，默认空数组；只填技术/领域词。
+        # entities: [DSH, MoBu, MotionBuilder, FBX]
