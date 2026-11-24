@@ -52,7 +52,9 @@ dsh plugin --profile <name> add dsh-memories-as-we-wish
 
 ## onebot / QQ 机器人
 
-对 **onebot 渠道（`dsh-qfish`）有原生支持**：会话里 `kind: "onebot"` 的用户消息会被正常索引，平台注入的括号提示行（如「（附上最近 3 张图…）」「（收到 1 张图…）」）在入库前剥离，不会混进 quote / summary / 注入内容。
+**索引层面原生支持** onebot 渠道（`dsh-qfish`）：会话里 `kind: "onebot"` 的用户消息会被正常索引，平台注入的括号提示行（如「（附上最近 3 张图…）」「（收到 1 张图…）」）在入库前剥离，不会混进 quote / summary / 注入内容。
+
+工具层面需要手动把本插件提供的工具注册进 onebot（`dsh-qfish` 侧配置），注册后 QQ 那边的角色才用得到 `memory_recall` / `memory_remember` / `memory_relink`。
 
 - 剥离规则可配置：`onebotHintPatterns`，只剥离**整行**以 `（`/`(` 开头、以 `）`/`)` 结尾且命中短语的行
 - 干跑（不写库）：`node tools/scan-onebot-hints.mjs --sessions <DSH_HOME>/sessions`，会报命中率与未命中样本
