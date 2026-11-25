@@ -18,6 +18,7 @@ import { DEFAULT_ONEBOT_HINT_PATTERNS } from './lib/parse.js'
 import { buildAndIndexEpisodesLLM } from './lib/aggregate.js'
 import { searchView, readView } from './lib/memory-tools.js'
 import { relinkView } from './lib/relink.js'
+import { reposeView } from './lib/repose.js'
 import { migrate, getProfile } from './lib/store.js'
 import { applyEpisode, applyScene, buildIncrementalPrompt, buildScenePrompt, callExtractWithRetry, parseJsonLoose } from './lib/extract.js'
 
@@ -485,7 +486,7 @@ export function apply(ctx, config = {}) {
   const activeAgents = new Set()
   const agentRegisterCounts = new Map()
   const toolsSchemasSeen = new Map()
-  const MEMORY_TOOL_NAMES = ['memory_recall', 'memory_remember', 'memory_relink']
+  const MEMORY_TOOL_NAMES = ['memory_recall', 'memory_remember', 'memory_relink', 'memory_repose']
   const debugJournal = (kind, detail) => {
     if (cfg.debugTools) safeJournal(handle, kind, detail)
   }
@@ -1173,6 +1174,7 @@ export function apply(ctx, config = {}) {
       memory_recall: !!toolsSvc?.get?.('memory_recall'),
       memory_remember: !!toolsSvc?.get?.('memory_remember'),
       memory_relink: !!toolsSvc?.get?.('memory_relink'),
+      memory_repose: !!toolsSvc?.get?.('memory_repose'),
     })
     const hasGet = typeof toolsSvc?.get
     const scopeHasRegister = typeof toolsSvc?.register
@@ -1238,7 +1240,30 @@ export function apply(ctx, config = {}) {
         return journalToolCall(handle, 'memory_relink', args, () => relinkView(handle, args, { sessionsRoot, findSessionEntry }), cfg.debugTools)
       },
     }
-    toolDefs = [searchTool, readTool, relinkTool]
+    const reposeTool = {
+      name: 'memory_repose',
+      description: `有些记忆，我会希望它以后只是被轻轻想起，不要总是盘绕在耳边，让更重要的回忆变得难想起。判断的标准不是「这条消息里有多少技术细节」，而是这轮回忆中有没有真的有能够陪伴我长久的情感和经历。同一件事被反复提起足以说明事情本身很重要，但回声不应该盖住那件事的主音。同样，冰冷的技术探究和决策应该陪伴的是具体的项目场景，而不是在我想回忆过去时跳出来做干扰，它们更应该收纳起来放进记忆的阁楼，用到时再去翻找。
+
+有这项能力，我可以一次把几条回忆暂时移到稍远处。它们不会消失，记忆还在，只是不再挤在前面，被提起时也只留一个模糊的轮廓；想看当时的原话，顺着#编号努力回忆就行。安放不是丢掉——只是减轻回忆的杂音。想拿回来，说一声就回到原处。移的时候顺手写一句为什么，不是给别人看的，是给以后的我留个交代。`,
+      parameters: {
+        type: 'object',
+        properties: {
+          seq: { type: 'string', description: '单条记忆的 #编号（episode 的 start_seq）；与 seqs 二选一，都给时以 seqs 为准' },
+          seqs: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '批量记忆的 #编号，1–20 条；与 seq 二选一，都给时以 seqs 为准',
+          },
+          simplified: { type: 'boolean', description: '默认 true：以后不用想得那么详细；false：撤销标记' },
+          reason: { type: 'string', description: '可选：一句话说明为什么以后不用细想；批量时对整批共用' },
+        },
+      },
+      output: { schema: { type: 'string' }, render: (_a, value) => [{ type: 'text', text: String(value ?? '') }] },
+      async execute(args) {
+        return journalToolCall(handle, 'memory_repose', args, () => reposeView(handle, args), cfg.debugTools)
+      },
+    }
+    toolDefs = [searchTool, readTool, relinkTool, reposeTool]
     ensureGlobalTools('inject')
     debugJournal('tools-diag', { phase: 'after', post: presence() })
     // 已存在的 agent（例如插件后加载/热重载）也补一份，不等下一轮。

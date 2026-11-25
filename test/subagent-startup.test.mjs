@@ -69,7 +69,7 @@ test('插件启动时按会话头清理子代理索引，根会话保留', async
       const detail = JSON.parse(purged.detail)
       assert.equal(detail.sessions, 1)
       assert.deepEqual(Object.keys(detail.before).sort(), ['aggregates', 'episodes', 'messages'])
-      assert.equal(tools.length, 3)
+      assert.equal(tools.length, 4)
     } finally { db.close() }
   } finally {
     dispose()

@@ -390,7 +390,7 @@ if (args.json) {
     cChecklist: [
       'C1 打开最新会话，能读取且无解压失败',
       'C2 插件日志出现“已启用/loaded”',
-      'C3 工具列表出现 memory_recall / memory_remember / memory_relink',
+      'C3 工具列表出现 memory_recall / memory_remember / memory_relink / memory_repose',
       'C4 发一条消息能收到回复（turn/end）'
     ]
   }, null, 2))
@@ -412,7 +412,7 @@ if (args.json) {
   console.log('C. 重启后（人工验证，脚本不能代替）')
   console.log('  C1 打开最新会话，能读取且无解压失败')
   console.log('  C2 插件日志出现“已启用/loaded”')
-  console.log('  C3 工具列表出现 memory_recall / memory_remember / memory_relink')
+  console.log('  C3 工具列表出现 memory_recall / memory_remember / memory_relink / memory_repose')
   console.log('  C4 发一条消息能收到回复（turn/end）')
   console.log('')
   console.log('D. 回滚（重启前先看 ROLLBACK.md，不要直接在运行中的进程上改）')

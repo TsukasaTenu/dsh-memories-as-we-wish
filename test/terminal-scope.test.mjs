@@ -113,8 +113,8 @@ test('插件启动 3 秒后自动把整个终端所有 workspace 索引进库', 
       assert.deepEqual(sessions, ['session-a', 'session-b'])
       const eps = db.db.prepare("SELECT COUNT(*) n FROM episodes_v2 WHERE status='active'").get().n
       assert.ok(eps >= 2, `expected episodes for both workspaces, got ${eps}`)
-      assert.equal(tools.length, 3)
-      assert.deepEqual(tools.map(t => t.name).sort(), ['memory_recall', 'memory_relink', 'memory_remember'])
+      assert.equal(tools.length, 4)
+      assert.deepEqual(tools.map(t => t.name).sort(), ['memory_recall', 'memory_relink', 'memory_remember', 'memory_repose'])
     } finally {
       db.close()
     }

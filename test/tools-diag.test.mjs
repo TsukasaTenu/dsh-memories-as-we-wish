@@ -26,7 +26,7 @@ test('工具诊断 journal：注册前后、tools/change、pre-step、tools-call
   }
   const dispose = apply(ctx, { debugLog: join(root, 'debug.log'), debugTools: true })
   try {
-    assert.equal(registered.length, 3, '三个工具都应注册')
+    assert.equal(registered.length, 4, '四个工具都应注册')
     await registered[0].execute({ query: '一个不存在的诊断查询' })
     const preStep = handlers['agent/pre-step']
     assert.equal(typeof preStep, 'function', '应有 pre-step 处理器')
@@ -45,9 +45,9 @@ test('工具诊断 journal：注册前后、tools/change、pre-step、tools-call
       assert.equal(before.debugLog, true)
       assert.equal(before.hasGet, 'function')
       assert.equal(before.scopeHasRegister, 'function')
-      assert.deepEqual(before.pre, { memory_recall: false, memory_remember: false, memory_relink: false })
+      assert.deepEqual(before.pre, { memory_recall: false, memory_remember: false, memory_relink: false, memory_repose: false })
       assert.ok(after, '缺 tools-diag after')
-      assert.deepEqual(after.post, { memory_recall: true, memory_remember: true, memory_relink: true })
+      assert.deepEqual(after.post, { memory_recall: true, memory_remember: true, memory_relink: true, memory_repose: true })
 
       const calls = rows.filter(r => r.kind === 'tools-call').map(r => JSON.parse(r.detail))
       assert.equal(calls.length, 1)
@@ -81,7 +81,7 @@ test('debugTools 默认关闭：不写任何工具探针 journal，但注册/自
   }
   const dispose = apply(ctx, { debugLog: join(root, 'debug.log') })
   try {
-    assert.equal(registered.length, 3, '注册行为保留')
+    assert.equal(registered.length, 4, '注册行为保留')
     await registered[0].execute({ query: '一个不存在的诊断查询' })
     const preStep = handlers['agent/pre-step']
     const agent = { session: { header: { id: 'debug-off' } }, ctx: { tools } }
