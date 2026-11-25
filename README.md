@@ -1,10 +1,9 @@
 # dsh-memories-as-we-wish
 
-给 AI 角色的**长期记忆**：LLM 事件概括 + 两档原文检索 + 线索触发的原文注入 + 当时的思考回读。
+极简长期记忆：LLM 事件概括 + 两档原文检索 + 线索触发的原文注入 + 思考回读。
 
-它只做「想起」，**不做压缩、不碰上下文窗口**——窗口交给 [`billion-context`](https://github.com/ranxianglei/billion-context)。两个一起装，才是完整方案。
 
-## 它做什么
+## 能力
 
 1. **LLM 事件概括**（episode 聚合：title / summary / cues）
    - 每 20 轮增量
@@ -13,9 +12,9 @@
 2. **主动两档检索**
    - `memory_recall`：`query` / `from` / `to` / `limit`（最多 20 条，不限字数）
    - `memory_remember`：按 `#seq` 定向读原文（`span` 给几条返几条，全文不截断）
-3. **回读当时的思考**
+3. **回读思考**
    - `memory_relink`：按 `#seq` 回读该轮会话里每个说话步骤之前最近的一段 `reasoning` 原文
-   - 不落库、不建索引、不跨轮；工具步只留工具名与参数前 120 字；单段思考超过 15000 字截断并注明原文总长
+   - 思考不参与建索引；工具步只留工具名与参数前 120 字；单段思考超过 15000 字截断并注明原文总长
 4. **触发式回忆**
    - 线索命中时在对话尾部注入原文片段（最多 10 条，不截断）
 
@@ -25,21 +24,9 @@
 
 ## 推荐的使用方式：和 billion-context 一起装
 
-**只装这一个，长期会卡在上下文上。** 这点先说清楚，不藏。
+原文级回忆能力对上下文和缓存较为不友好，因此建议与合适的上下文插件一同使用。由于检索基于会话原卷，不推荐与能够直接修改会话文件的插件共用。
 
-原因很直接：本插件回忆出来的是**原文**（触发注入最多 10 条、`memory_recall` 最多 20 条，都不限字数），而它自己不压缩、不折叠、不重装窗口。会话越长，可回忆的越多，注入进去的原文也越占地方——几十上百轮之后，光靠它，主会话会被自己的记忆拖重。
-
-**组合起来才成立：**
-
-| 谁 | 负责 |
-|---|---|
-| `dsh-memories-as-we-wish` | 记住：索引原文、按线索或主动检索、注入原话 |
-| `billion-context` | 装得下：把长窗口压成可逆的摘要块，需要细节时再展开 |
-
-`billion-context` 做的正是「超长主会话里长期保持稳定」的那一半：它把早期对话压成摘要块留在上下文里，让窗口不随轮数线性膨胀；而摘要是摘要——**原话的落点在记忆库**。于是两边互补：
-
-- 想不起具体细节 → `memory_recall` / `memory_remember` 从库里取原文
-- 上下文太长 → `billion-context` 压掉已经消化的部分，前缀缓存仍然命中
+本插件回忆出来的是原文（触发注入最多 10 条、`memory_recall` 最多 20 条，都不限字数），而它自己不压缩、不折叠、不重装窗口。会话越长，可回忆的越多，注入进去的原文也越占地方——几十上百轮之后，光靠它，主会话会被自己的记忆拖重。
 
 实测（1.0.17 + billion-context 0.1.216）：单轮上下文中约 43% 是工具结果、52% 是对话文本、5% 是压缩摘要；压缩后每轮上游输入从约 481K 降到约 153K（**降 68%**），长期缓存命中率 99%+，每轮真正新付的只有几百到几千 token。在本机 7,000+ 条消息、3,600+ 段 episode 的库上，主会话仍能保持「接得上」。
 
@@ -50,11 +37,11 @@ dsh plugin --profile <name> add billion-context
 dsh plugin --profile <name> add dsh-memories-as-we-wish
 ```
 
-## onebot / QQ 机器人
+## onebot / QQ 机器人（`dsh-qfish`）
 
-**索引层面原生支持** onebot 渠道（`dsh-qfish`）：会话里 `kind: "onebot"` 的用户消息会被正常索引，平台注入的括号提示行（如「（附上最近 3 张图…）」「（收到 1 张图…）」）在入库前剥离，不会混进 quote / summary / 注入内容。
+提供索引层面支持 onebot 渠道（`dsh-qfish`）：会话里 `kind: "onebot"` 的用户消息会被正常索引，平台注入提示行剥离，不会混进 quote / summary / 注入内容。
 
-工具层面需要手动把本插件提供的工具注册进 onebot（`dsh-qfish` 侧配置），注册后 QQ 那边的角色才用得到 `memory_recall` / `memory_remember` / `memory_relink`。
+工具层面需要手动把本插件提供的工具注册进插件的工具许可（`dsh-qfish` 侧配置），注册后 QQ 会话才用得到 `memory_recall` / `memory_remember` / `memory_relink`。
 
 - 剥离规则可配置：`onebotHintPatterns`，只剥离**整行**以 `（`/`(` 开头、以 `）`/`)` 结尾且命中短语的行
 - 干跑（不写库）：`node tools/scan-onebot-hints.mjs --sessions <DSH_HOME>/sessions`，会报命中率与未命中样本
@@ -79,7 +66,7 @@ dsh plugin --profile <name> add dsh-memories-as-we-wish
 
 ## 不做
 
-- 水位检测、主线/摘要分层、重装配、任何改窗口的逻辑（交给 `billion-context`）
+- 水位检测、主线/摘要分层、重装配、任何改窗口的逻辑
 - LLM 摘要不作为记忆内容展示；title/summary/cues 只作为检索键
 - 不按 workspace / profile / session 过滤检索（终端内记忆必须合并）
 
