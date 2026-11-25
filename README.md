@@ -13,7 +13,7 @@
    - 首次安装全局分批（可断点续跑）
    - 历史欠账由常驻回填按积压补，没有静默 24h 特判
 2. **主动两档检索**
-   - `memory_recall`：`query` / `from` / `to` / `limit`（最多 20 条，不限字数）
+   - `memory_recall`：`query` / `from` / `to` / `limit`（最多 50 条，不限字数）/ `tail`（默认 10，最多 50；追加仅含时间、编号、完整摘要和 50 字正文选段的弱候选）
    - `memory_remember`：按 `#seq` 定向读原文（`span` 给几条返几条，全文不截断）
    - 重复多次提起的近似话题的检索质量会略有下降，发现模型回忆不准确时建议由用户侧给予提示（如时间、上下文等）
 3. **回读思考**
@@ -35,7 +35,7 @@
 
 原文级回忆能力对上下文和缓存较为不友好，因此建议与合适的上下文插件一同使用。由于检索基于会话原卷，不推荐与能够直接修改会话文件的插件共用。
 
-本插件回忆出来的是原文（触发注入最多 10 条、`memory_recall` 最多 20 条，都不限字数），而它自己不压缩、不折叠、不重装窗口。会话越长，可回忆的越多，注入进去的原文也越占地方——几十上百轮之后，光靠它，主会话会被自己的记忆拖重。
+本插件回忆出来的是原文（触发注入最多 10 条、`memory_recall` 最多 50 条，都不限字数），而它自己不压缩、不折叠、不重装窗口。会话越长，可回忆的越多，注入进去的原文也越占地方——几十上百轮之后，光靠它，主会话会被自己的记忆拖重。
 
 实测（1.0.17 + billion-context 0.1.216）：单轮上下文中约 43% 是工具结果、52% 是对话文本、5% 是压缩摘要；压缩后每轮上游输入从约 481K 降到约 153K（**降 68%**），长期缓存命中率 99%+，每轮真正新付的只有几百到几千 token。在本机 7,000+ 条消息、3,600+ 段 episode 的库上，主会话仍能保持「接得上」。
 
@@ -50,7 +50,7 @@ dsh plugin --profile <name> add dsh-memories-as-we-wish
 
 提供索引层面支持 onebot 渠道（`dsh-qfish`）：会话里 `kind: "onebot"` 的用户消息会被正常索引，平台注入提示行剥离，不会混进 quote / summary / 注入内容。
 
-工具层面需要手动把本插件提供的工具注册进插件的工具许可（`dsh-qfish` 侧配置），注册后 QQ 会话才用得到 `memory_recall` / `memory_remember` / `memory_relink`。
+工具层面会自动注册到全局与当前 agent 作用域；如果会话的工具集在一段时间后丢失，插件会在下一次请求构建前自愈补回。若 `dsh-qfish` 另有工具许可/白名单，仍需要在它那边放行 `memory_recall` / `memory_remember` / `memory_relink`。
 
 - 剥离规则可配置：`onebotHintPatterns`，只剥离**整行**以 `（`/`(` 开头、以 `）`/`)` 结尾且命中短语的行
 - 干跑（不写库）：`node tools/scan-onebot-hints.mjs --sessions <DSH_HOME>/sessions`，会报命中率与未命中样本
@@ -138,6 +138,7 @@ node .\install-selfcheck.mjs --profile <name> --dsh-home <DSH_HOME>
 | `backfillCallsPerMinute` | `12` | 每分钟 LLM 调用上限 |
 | `backfillMemHeapBytes` / `backfillMemRssBytes` | `600MB` / `900MB` | 内存阈值，超过暂停回填（保证宿主整体 < 1GB） |
 | `backfillFailuresBeforePause` / `backfillFailurePauseMs` | `3` / `300000` | 连续失败暂停策略 |
+| `debugTools` | `false` | 工具注册/自愈/调用诊断日志；默认关闭，发布版不写探针 |
 
 ## 聚合触发与常驻回填
 

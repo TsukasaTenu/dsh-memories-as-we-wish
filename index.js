@@ -24,6 +24,10 @@ import { applyEpisode, applyScene, buildIncrementalPrompt, buildScenePrompt, cal
 export const name = 'dsh-memories-as-we-wish'
 export const inject = []
 
+// 诊断用：注册回调里拿到的 tools 服务引用；pre-step 用它对比全局可见性。
+// 只观测，不参与注册逻辑。
+let toolsRegistry = null
+
 /** 终端根：显式配置 > DSH_HOME > DSH 默认的 ~/.dsh。 */
 export function resolveHome(env = process.env) {
   const fromEnv = typeof env.DSH_HOME === 'string' ? env.DSH_HOME.trim() : ''
@@ -347,6 +351,8 @@ const DEFAULTS = {
   backfillFailuresBeforePause: 3,
   backfillFailurePauseMs: 300_000,
   debugLog: '',
+  /** 工具注册/自愈/调用诊断日志；默认关闭，发布版不写探针 */
+  debugTools: false,
 }
 
 /**
@@ -470,6 +476,139 @@ export function apply(ctx, config = {}) {
       log(cfg, 'info', `memory ${label} rss=${Math.round(m.rss / 1048576)}MB heapUsed=${Math.round(m.heapUsed / 1048576)}MB external=${Math.round(m.external / 1048576)}MB`)
     } catch { /* ignore */ }
   }
+  // ---------- 工具注册/自愈 ----------
+  // 全局注册与 agent scope 注册分开：qfish 这类 agent preset 可能用 tools.restrict
+  // 把全局工具挡在远处，单靠全局注册模型侧就看不到；agent scope 自己的注册不受限制。
+  let toolDefs = []
+  let globalTools = null
+  let healingTools = false
+  const activeAgents = new Set()
+  const agentRegisterCounts = new Map()
+  const toolsSchemasSeen = new Map()
+  const MEMORY_TOOL_NAMES = ['memory_recall', 'memory_remember', 'memory_relink']
+  const debugJournal = (kind, detail) => {
+    if (cfg.debugTools) safeJournal(handle, kind, detail)
+  }
+
+  const toolsSelfheal = (name, scope, ok, error, reason) => {
+    debugJournal('tools-selfheal', {
+      name, scope, ok, reason,
+      ...(error ? { error: String(error?.message ?? error) } : {}),
+    })
+  }
+
+  const isInactiveContextError = (error) => /inactive context/i.test(String(error?.message ?? error))
+  const isAlreadyRegisteredError = (error) => /already\s+(?:registered|exists)|already registered in this scope/i.test(String(error?.message ?? error))
+
+  const ensureGlobalTools = (reason = '') => {
+    if (!globalTools?.register || toolDefs.length === 0) return 0
+    let changed = 0
+    for (const def of toolDefs) {
+      let visible = false
+      try { visible = !!globalTools.get?.(def.name) } catch { visible = false }
+      if (visible) continue
+      try {
+        globalTools.register(def)
+        changed++
+        toolsSelfheal(def.name, 'global', true, null, reason)
+      } catch (error) {
+        if (isInactiveContextError(error)) break
+        toolsSelfheal(def.name, 'global', false, error, reason)
+      }
+    }
+    return changed
+  }
+
+  const ensureAgentTools = (agent, reason = '') => {
+    const tools = agent?.ctx?.tools
+    if (!tools?.register || toolDefs.length === 0) return 0
+    const sessionId = String(agent?.session?.header?.id ?? agent?.id ?? 'unknown')
+    let count = agentRegisterCounts.get(sessionId) ?? 0
+    let registered = 0
+    for (const def of toolDefs) {
+      count += 1
+      try {
+        // 无条件注册到该 agent 自己的 scope。同名已在当前 scope 注册时，
+        // DSH 会拒绝重复插入；那说明它已经在了，按成功处理。
+        tools.register(def)
+        registered += 1
+        agentRegisterCounts.set(sessionId, count)
+        debugJournal('tools-agent-register', { sessionId, name: def.name, ok: true, already: false, reason, count })
+        toolsSelfheal(def.name, 'agent', true, null, reason)
+      } catch (error) {
+        if (isInactiveContextError(error)) {
+          activeAgents.delete(agent)
+          break
+        }
+        agentRegisterCounts.set(sessionId, count)
+        if (isAlreadyRegisteredError(error)) {
+          debugJournal('tools-agent-register', { sessionId, name: def.name, ok: true, already: true, reason, count })
+          continue
+        }
+        debugJournal('tools-agent-register', { sessionId, name: def.name, ok: false, already: false, reason, count, error: String(error?.message ?? error) })
+        toolsSelfheal(def.name, 'agent', false, error, reason)
+      }
+    }
+    agentRegisterCounts.set(sessionId, count)
+    return registered
+  }
+
+  const healAllTools = (reason = '') => {
+    if (healingTools) return
+    healingTools = true
+    try {
+      ensureGlobalTools(reason)
+      for (const agent of activeAgents) ensureAgentTools(agent, reason)
+    } finally {
+      healingTools = false
+    }
+  }
+
+  const schemaNames = (schemas) => schemas
+    .map(schema => schema?.name ?? schema?.function?.name)
+    .filter(name => typeof name === 'string')
+
+  const journalToolsSchemas = (agent) => {
+    if (!cfg.debugTools) return
+    const sessionId = String(agent?.session?.header?.id ?? agent?.id ?? 'unknown')
+    const agentId = String(agent?.id ?? 'unknown')
+    const sessionKey = `${sessionId}\u0000${agentId}`
+    try {
+      const runtime = globalTools
+      if (!runtime?.schemas) return
+      const agentSchemas = agent ? runtime.schemas(agent) : []
+      const globalSchemas = runtime.schemas()
+      const agentNames = schemaNames(agentSchemas)
+      const globalNames = schemaNames(globalSchemas)
+      const agentHasMem = MEMORY_TOOL_NAMES.filter(name => agentNames.includes(name))
+      const globalHasMem = MEMORY_TOOL_NAMES.filter(name => globalNames.includes(name))
+      const signature = `${agentNames.length}:${globalNames.length}:${agentHasMem.join(',')}`
+      const previous = toolsSchemasSeen.get(sessionKey)
+      if (previous === signature) return
+      toolsSchemasSeen.set(sessionKey, signature)
+      let presentation = 'unknown'
+      try { presentation = runtime.modeFor?.(agent) ?? 'unknown' } catch {}
+      debugJournal('tools-schemas', {
+        sessionId,
+        agentId,
+        scopeKind: agent ? 'agent' : 'global',
+        agentCount: agentNames.length,
+        globalCount: globalNames.length,
+        agentHasMem,
+        globalHasMem,
+        ...(agentNames.length <= 25 ? { shortNames: agentNames } : {}),
+        presentation,
+      })
+    } catch (error) {
+      debugJournal('tools-schemas', {
+        sessionId,
+        agentId,
+        scopeKind: agent ? 'agent' : 'global',
+        error: String(error?.message ?? error),
+      })
+    }
+  }
+
   const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
   const waitDisk = (label) => waitForDisk({
     label,
@@ -968,8 +1107,13 @@ export function apply(ctx, config = {}) {
     }
   })
 
-  // 每轮开始：触发式注入（尾部，带框架）
+  // 每轮开始：先自愈工具（必须在请求工具表组装前），再做触发式注入。
   ctx.on('agent/pre-step', async (payload, next) => {
+    const agent = payload?.agent
+    if (agent) activeAgents.add(agent)
+    ensureGlobalTools('pre-step')
+    if (agent) ensureAgentTools(agent, 'pre-step')
+    journalToolsSchemas(agent)
     touchTurn(sidOf(payload))
     const decision = await next()
     try {
@@ -1005,9 +1149,44 @@ export function apply(ctx, config = {}) {
     }
   }, { prepend: true })
 
+  // agent 创建时就注册到它的 scope；resume/重启后的旧 agent 由 pre-step 兜底。
+  try {
+    ctx.on('agent/created', ({ agent, source } = {}) => {
+      if (!agent) return
+      activeAgents.add(agent)
+      ensureAgentTools(agent, source ? `agent-created:${source}` : 'agent-created')
+    })
+    ctx.on('agent/disposed', ({ agent } = {}) => {
+      if (agent) activeAgents.delete(agent)
+    })
+  } catch (error) {
+    log(cfg, 'warn', `agent 工具监听失败：${String(error?.message ?? error)}`)
+  }
+
   // ---------- 主动工具（规格 §2 / §2.1 / §3.5）----------
   ctx.inject(['tools'], (scope) => {
     const toolCtx = scope
+    const toolsSvc = toolCtx?.tools
+    toolsRegistry = toolsSvc ?? null
+    globalTools = toolsSvc ?? null
+    const presence = () => ({
+      memory_recall: !!toolsSvc?.get?.('memory_recall'),
+      memory_remember: !!toolsSvc?.get?.('memory_remember'),
+      memory_relink: !!toolsSvc?.get?.('memory_relink'),
+    })
+    const hasGet = typeof toolsSvc?.get
+    const scopeHasRegister = typeof toolsSvc?.register
+    debugJournal('tools-diag', {
+      phase: 'before', debugLog: !!cfg.debugLog, hasGet, scopeHasRegister, pre: presence(),
+    })
+    // tools/change 不再只记录：检测缺失就重注册。日志由 ensure* 在真正补注册时写。
+    const onChange = () => healAllTools('tools-change')
+    try {
+      if (typeof toolCtx?.on === 'function') toolCtx.on('tools/change', onChange)
+      else if (typeof ctx.on === 'function') ctx.on('tools/change', onChange)
+    } catch (error) {
+      log(cfg, 'warn', `tools/change 监听失败：${String(error?.message ?? error)}`)
+    }
     const searchTool = {
       name: 'memory_recall',
       // "这是什么"只写一次，写在注册里（§2.1）
@@ -1018,13 +1197,14 @@ export function apply(ctx, config = {}) {
           query: { type: 'string', description: '想找的事/一句话/一个名字；可留空，留空则按 from/to 时间范围查' },
           from: { type: 'string', description: '可选，起始日期（含），格式 YYYY-MM-DD' },
           to: { type: 'string', description: '可选，结束日期（含），格式 YYYY-MM-DD' },
-          limit: { type: 'string', description: '条数 1–20，默认 20（最多 20）' },
+          limit: { type: 'string', description: '条数 1–50，默认 20（最多 50）' },
+          tail: { type: 'integer', description: 'tail：可选。除了最相关的那几条之外，还想再看一些较弱的候选时填这个数（默认 10，最多 50）。它们只有时间、编号、完整摘要和一句正文选段，没有完整正文。' },
         },
         required: [],
       },
       output: { schema: { type: 'string' }, render: (_a, value) => [{ type: 'text', text: String(value ?? '') }] },
       async execute(args) {
-        return searchView(handle, args, { entities: cfg.entities, now: Date.now() })
+        return journalToolCall(handle, 'memory_recall', args, () => searchView(handle, args, { entities: cfg.entities, now: Date.now() }), cfg.debugTools)
       },
     }
     const readTool = {
@@ -1040,7 +1220,7 @@ export function apply(ctx, config = {}) {
       },
       output: { schema: { type: 'string' }, render: (_a, value) => [{ type: 'text', text: String(value ?? '') }] },
       async execute(args) {
-        return readView(handle, args)
+        return journalToolCall(handle, 'memory_remember', args, () => readView(handle, args), cfg.debugTools)
       },
     }
     const relinkTool = {
@@ -1055,18 +1235,55 @@ export function apply(ctx, config = {}) {
       },
       output: { schema: { type: 'string' }, render: (_a, value) => [{ type: 'text', text: String(value ?? '') }] },
       async execute(args) {
-        return relinkView(handle, args, { sessionsRoot, findSessionEntry })
+        return journalToolCall(handle, 'memory_relink', args, () => relinkView(handle, args, { sessionsRoot, findSessionEntry }), cfg.debugTools)
       },
     }
-    for (const tool of [searchTool, readTool, relinkTool]) {
-      try { toolCtx.tools.register(tool) } catch (error) { log(cfg, 'warn', `注册工具 ${tool.name} 失败：${String(error?.message ?? error)}`) }
-    }
+    toolDefs = [searchTool, readTool, relinkTool]
+    ensureGlobalTools('inject')
+    debugJournal('tools-diag', { phase: 'after', post: presence() })
+    // 已存在的 agent（例如插件后加载/热重载）也补一份，不等下一轮。
+    for (const agent of activeAgents) ensureAgentTools(agent, 'inject-existing')
   })
 
   return () => {
     for (const t of indexTimers) { try { clearTimeout(t) } catch { /* noop */ } }
     indexTimers.clear()
     try { handle.close() } catch { /* ignore */ }
+  }
+}
+
+function safeJournal(handle, kind, detail) {
+  try { handle?.journal?.(kind, detail) } catch { /* 诊断不能影响主流程 */ }
+}
+
+function argsSizeOf(args) {
+  try { return JSON.stringify(args ?? {}).length } catch { return 0 }
+}
+
+/** 包一层 execute：仅在 debugTools 时记录 tools-call（成功/失败/耗时/参数大小），不改变返回值或异常。 */
+function journalToolCall(handle, name, args, run, debugTools = false) {
+  if (!debugTools) return run()
+  const started = Date.now()
+  const size = argsSizeOf(args)
+  let settled = false
+  const record = (ok) => {
+    if (settled) return
+    settled = true
+    safeJournal(handle, 'tools-call', { name, ok, ms: Date.now() - started, argsSize: size })
+  }
+  try {
+    const result = run()
+    if (result && typeof result.then === 'function') {
+      return result.then(
+        (value) => { record(true); return value },
+        (error) => { record(false); throw error },
+      )
+    }
+    record(true)
+    return result
+  } catch (error) {
+    record(false)
+    throw error
   }
 }
 
