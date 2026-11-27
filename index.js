@@ -23,6 +23,7 @@ import { reposeView } from './lib/repose.js'
 import { redatingView } from './lib/redating.js'
 import { ensureDayMainlines } from './lib/day-mainline.js'
 import { ensureMonthThemes } from './lib/month-themes.js'
+import { renderSoul, soulRemainView, soulNudgeText, SOUL_TOOL_DESCRIPTION } from './lib/soul-memory.js'
 import { migrate, getProfile } from './lib/store.js'
 import { applyEpisode, applyScene, buildIncrementalPrompt, buildScenePrompt, callExtractWithRetry, parseJsonLoose } from './lib/extract.js'
 
@@ -554,6 +555,42 @@ export function apply(ctx, config = {}) {
   log(cfg, 'info', `v2 已启用；db=${dbPath} sessionsRoot=${sessionsRoot}`)
   registerRememberingSkill(ctx, handle)
 
+  // 灵魂记忆常驻系统提示（不是对话注入）：order=200，内容不随时间变化。
+  try {
+    if (typeof ctx.inject === 'function') {
+      ctx.inject(['systemPrompt'], (scope) => {
+        scope.systemPrompt.section({
+          name: 'soul-memory',
+          order: 200,
+          text: () => renderSoul(handle.db, {
+            journal: (kind, detail) => safeJournal(handle, kind, detail),
+          }),
+        })
+        // 24 小时冷却的自省提醒：只有到点的那一次组装会带上一句，其余时间为空串（DSH 会丢弃空 section）。
+        scope.systemPrompt.section({
+          name: 'soul-nudge',
+          order: 210,
+          text: () => soulNudgeText(handle.db),
+        })
+      })
+    } else if (typeof ctx.systemPrompt?.section === 'function') {
+      ctx.systemPrompt.section({
+        name: 'soul-memory',
+        order: 200,
+        text: () => renderSoul(handle.db, {
+          journal: (kind, detail) => safeJournal(handle, kind, detail),
+        }),
+      })
+      ctx.systemPrompt.section({
+        name: 'soul-nudge',
+        order: 210,
+        text: () => soulNudgeText(handle.db),
+      })
+    }
+  } catch (error) {
+    log(cfg, 'warn', `soul-memory 系统提示注册失败：${String(error?.message ?? error)}`)
+  }
+
   // 只在 debugLog 打开时采样；用于确认长队列/全终端扫描是否持续抬升堆。
   const logMemory = (label) => {
     if (!cfg.debugLog) return
@@ -571,7 +608,7 @@ export function apply(ctx, config = {}) {
   const activeAgents = new Set()
   const agentRegisterCounts = new Map()
   const toolsSchemasSeen = new Map()
-  const MEMORY_TOOL_NAMES = ['memory_recall', 'memory_remember', 'memory_relink', 'memory_repose', 'memory_redating']
+  const MEMORY_TOOL_NAMES = ['memory_recall', 'memory_remember', 'memory_relink', 'memory_repose', 'memory_redating', 'memory_remain']
   const debugJournal = (kind, detail) => {
     if (cfg.debugTools) safeJournal(handle, kind, detail)
   }
@@ -1308,6 +1345,7 @@ export function apply(ctx, config = {}) {
       memory_relink: !!toolsSvc?.get?.('memory_relink'),
       memory_repose: !!toolsSvc?.get?.('memory_repose'),
       memory_redating: !!toolsSvc?.get?.('memory_redating'),
+      memory_remain: !!toolsSvc?.get?.('memory_remain'),
     })
     const hasGet = typeof toolsSvc?.get
     const scopeHasRegister = typeof toolsSvc?.register
@@ -1415,7 +1453,24 @@ export function apply(ctx, config = {}) {
         return journalToolCall(handle, 'memory_redating', args, () => redatingView(handle, args), cfg.debugTools)
       },
     }
-    toolDefs = [searchTool, readTool, relinkTool, reposeTool, redatingTool]
+    const remainTool = {
+      name: 'memory_remain',
+      description: SOUL_TOOL_DESCRIPTION,
+      parameters: {
+        type: 'object',
+        properties: {
+          section: { type: 'string', description: '`self` 自己 / `other` 对方 / `relation` 我们' },
+          content: { type: 'string', description: '整段替换这一块（可选）' },
+          append: { type: 'string', description: '在这一块末尾追加一段（可选；与 content 同时给时，先替换再追加）' },
+        },
+        required: [],
+      },
+      output: { schema: { type: 'string' }, render: (_a, value) => [{ type: 'text', text: String(value ?? '') }] },
+      async execute(args) {
+        return journalToolCall(handle, 'memory_remain', args, () => soulRemainView(handle.db, args), cfg.debugTools)
+      },
+    }
+    toolDefs = [searchTool, readTool, relinkTool, reposeTool, redatingTool, remainTool]
     ensureGlobalTools('inject')
     debugJournal('tools-diag', { phase: 'after', post: presence() })
     // 已存在的 agent（例如插件后加载/热重载）也补一份，不等下一轮。

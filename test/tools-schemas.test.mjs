@@ -21,7 +21,7 @@ test('tools-schemas：全局有、agent 被 restrict 掉时如实记录两路 sc
   const globalRegistered = []
   const scopedRegistered = []
   const agentNames = ['working_directory', 'onebot_memory']
-  const globalNames = ['working_directory', 'memory_recall', 'memory_remember', 'memory_relink', 'memory_repose', 'memory_redating', 'onebot_memory']
+  const globalNames = ['working_directory', 'memory_recall', 'memory_remember', 'memory_relink', 'memory_repose', 'memory_redating', 'memory_remain', 'onebot_memory']
   const globalTools = {
     get(name) { return globalRegistered.find(t => t.name === name) },
     register(tool) { globalRegistered.push(tool) },
@@ -60,9 +60,9 @@ test('tools-schemas：全局有、agent 被 restrict 掉时如实记录两路 sc
     assert.equal(row.agentId, 'agent-schemas')
     assert.equal(row.scopeKind, 'agent')
     assert.equal(row.agentCount, 2)
-    assert.equal(row.globalCount, 7)
+    assert.equal(row.globalCount, 8)
     assert.deepEqual(row.agentHasMem, [])
-    assert.deepEqual(row.globalHasMem, ['memory_recall', 'memory_remember', 'memory_relink', 'memory_repose', 'memory_redating'])
+    assert.deepEqual(row.globalHasMem, ['memory_recall', 'memory_remember', 'memory_relink', 'memory_repose', 'memory_redating', 'memory_remain'])
     assert.deepEqual(row.shortNames, agentNames)
     assert.equal(row.presentation, 'native')
 

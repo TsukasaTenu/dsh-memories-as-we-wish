@@ -50,36 +50,36 @@ test('工具注册：agent scope 无条件注册、重复容忍、resume/pre-ste
   const preStep = handlers.get('agent/pre-step')?.[0]
   const created = handlers.get('agent/created')?.[0]
   try {
-    assert.equal(globalRegistered.length, 5, '全局初始注册四个')
+    assert.equal(globalRegistered.length, 6, '全局初始注册六个')
     assert.equal(scopedRegistered.length, 0, 'agent 尚未创建')
     assert.equal(typeof preStep, 'function')
     assert.equal(typeof created, 'function')
 
     created({ agent, source: 'startup' })
-    assert.deepEqual(scopedRegistered.map(t => t.name).sort(), ['memory_recall', 'memory_redating', 'memory_relink', 'memory_remember', 'memory_repose'])
+    assert.deepEqual(scopedRegistered.map(t => t.name).sort(), ['memory_recall', 'memory_redating', 'memory_relink', 'memory_remain', 'memory_remember', 'memory_repose'])
     let regs = rows('tools-agent-register')
-    assert.equal(regs.filter(x => x.ok && !x.already).length, 5)
+    assert.equal(regs.filter(x => x.ok && !x.already).length, 6)
     assert.ok(regs.every(x => x.sessionId === 'qfish-like' && x.reason === 'agent-created:startup'))
 
     // 第二次注册：同名重复应被当作成功，不重复插入
     created({ agent, source: 'resume' })
-    assert.equal(scopedRegistered.length, 5)
+    assert.equal(scopedRegistered.length, 6)
     regs = rows('tools-agent-register')
-    assert.equal(regs.filter(x => x.ok && x.already).length, 5)
+    assert.equal(regs.filter(x => x.ok && x.already).length, 6)
     assert.equal(regs.at(-1).reason, 'agent-created:resume')
 
     // 模拟 scope 被清空，pre-step 应恢复
     scopedRegistered.length = 0
     await preStep({ agent, messages: [] }, async () => ({ kind: 'enter', messages: [] }))
-    assert.equal(scopedRegistered.length, 5, 'pre-step 应恢复 agent scope 工具')
+    assert.equal(scopedRegistered.length, 6, 'pre-step 应恢复 agent scope 工具')
     assert.ok(rows('tools-agent-register').some(x => x.reason === 'pre-step' && x.ok && !x.already))
 
     // 模拟全局工具被移除
     const globalHealsBefore = rows('tools-selfheal').filter(x => x.scope === 'global').length
     globalRegistered.length = 0
     await preStep({ agent, messages: [] }, async () => ({ kind: 'enter', messages: [] }))
-    assert.equal(globalRegistered.length, 5, 'pre-step 应恢复全局工具')
-    assert.equal(rows('tools-selfheal').filter(x => x.scope === 'global').length, globalHealsBefore + 5)
+    assert.equal(globalRegistered.length, 6, 'pre-step 应恢复全局工具')
+    assert.equal(rows('tools-selfheal').filter(x => x.scope === 'global').length, globalHealsBefore + 6)
 
     // tools/change：两层都移除后应恢复
     scopedRegistered.length = 0
@@ -87,8 +87,8 @@ test('工具注册：agent scope 无条件注册、重复容忍、resume/pre-ste
     const change = handlers.get('tools/change')?.[0]
     assert.equal(typeof change, 'function')
     change()
-    assert.equal(globalRegistered.length, 5)
-    assert.equal(scopedRegistered.length, 5)
+    assert.equal(globalRegistered.length, 6)
+    assert.equal(scopedRegistered.length, 6)
 
     // 幂等：工具都在时只记录 already=true，不产生工具自愈错误
     const selfhealBefore = rows('tools-selfheal').length

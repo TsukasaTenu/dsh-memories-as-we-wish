@@ -1,45 +1,45 @@
 {
-    "name":  "dsh-memories-as-we-wish",
-    "version":  "1.0.35",
-    "description":  "Long-term memory for AI characters: LLM episode summaries + two-tier retrieval + cue-triggered recall.",
-    "license":  "MIT",
-    "author":  "天雨 つかさ \u0026 爱慕织姬",
-    "keywords":  [
-                     "dsh",
-                     "dsh-plugin",
-                     "memory",
-                     "long-term-memory",
-                     "recall",
-                     "llm"
-                 ],
-    "repository":  {
-                       "type":  "git",
-                       "url":  "https://github.com/TsukasaTenu/dsh-memories-as-we-wish.git"
-                   },
-    "homepage":  "https://github.com/TsukasaTenu/dsh-memories-as-we-wish#readme",
-    "bugs":  {
-                 "url":  "https://github.com/TsukasaTenu/dsh-memories-as-we-wish/issues"
-             },
-    "engines":  {
-                    "node":  "\u003e=22.5"
-                },
-    "type":  "module",
-    "exports":  {
-                    ".":  "./index.js",
-                    "./lib/*":  "./lib/*",
-                    "./cordis.patch.yml":  "./cordis.patch.yml",
-                    "./package.json":  "./package.json"
-                },
-    "files":  [
-                  "index.js",
-                  "lib",
-                  "skills",
-                  "cordis.patch.yml",
-                  "README.md"
-              ],
-    "dsh":  {
-                "bundle":  {
-                               "patch":  "./cordis.patch.yml"
-                           }
-            }
+  "name": "dsh-memories-as-we-wish",
+  "version": "1.0.37",
+  "description": "Long-term memory for AI characters: LLM episode summaries + two-tier retrieval + cue-triggered recall.",
+  "license": "MIT",
+  "author": "天雨 つかさ & 爱慕织姬",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "memory",
+    "long-term-memory",
+    "recall",
+    "llm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TsukasaTenu/dsh-memories-as-we-wish.git"
+  },
+  "homepage": "https://github.com/TsukasaTenu/dsh-memories-as-we-wish#readme",
+  "bugs": {
+    "url": "https://github.com/TsukasaTenu/dsh-memories-as-we-wish/issues"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./lib/*": "./lib/*",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "skills",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
 }
