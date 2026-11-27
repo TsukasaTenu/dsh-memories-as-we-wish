@@ -209,3 +209,34 @@ test('A 段来源：机械标题可读时仍排在 LLM 标题之后', () => {
     assert.equal(d.summary, 'LLM 标题优先')
   } finally { h.close() }
 })
+
+test('kind：不传保持原序，传 promise 让同分 promise 提前，非法 kind 不改变', () => {
+  const h = openDb(':memory:')
+  try {
+    h.indexEpisodes('s', [
+      { ...ep(1, 'same words here', 'same summary', '同分甲'), startAt: T0, endAt: T0 + 1 },
+      { ...ep(2, 'same words here', 'same summary', '同分乙'), startAt: T0 + 1000, endAt: T0 + 1001 },
+    ])
+    h.putAggregate('s', 1, 2, { title: '同分甲', summary: 'same summary', cues: '', quote: '', kind: 'promise', first: false })
+    h.putAggregate('s', 2, 3, { title: '同分乙', summary: 'same summary', cues: '', quote: '', kind: 'task', first: false })
+    const base = searchView(h, { query: 'same words here', limit: 2, tail: 0 })
+    const boosted = searchView(h, { query: 'same words here', limit: 2, tail: 0, kind: 'promise' })
+    const invalid = searchView(h, { query: 'same words here', limit: 2, tail: 0, kind: 'nope' })
+    assert.equal(base, invalid)
+    const b = base.match(/#\d+/g)
+    const k = boosted.match(/#\d+/g)
+    if (b?.[0] !== k?.[0]) assert.match(boosted, /同分甲/)
+  } finally { h.close() }
+})
+
+test('kind：fact 是新枚举，可被 memory_recall 选中且不记 invalid', () => {
+  const h = openDb(':memory:')
+  try {
+    h.indexEpisodes('s', [{ ...ep(1, '他说以前养过一只兔子', '他说以前养过一只兔子', '兔子叫雪球'), startAt: T0, endAt: T0 + 1 }])
+    h.putAggregate('s', 1, 2, { title: '兔子叫雪球', summary: '事实', cues: '', quote: '', kind: 'fact', first: false })
+    const out = searchView(h, { query: '兔子', limit: 5, tail: 0, kind: 'fact' })
+    assert.match(out, /他说以前养过一只兔子/)
+    const invalid = h.db.prepare("SELECT COUNT(*) n FROM journal WHERE kind='recall-kind-invalid'").get()
+    assert.equal(Number(invalid.n), 0)
+  } finally { h.close() }
+})

@@ -88,3 +88,30 @@ test('20MB+ 合成会话流式扫描后 heap 仍 < 200MB', () => {
   assert.equal(ret.events, undefined)
   assert.ok(peakHeap < 200 * 1024 * 1024, `peakHeap=${Math.round(peakHeap / 1048576)}MB`)
 })
+import { openDb } from '../lib/db.js'
+import { indexSessionFile } from '../lib/pipeline.js'
+
+const frame = events => zlib.zstdCompressSync(Buffer.from(events.map(e => JSON.stringify(e)).join('\n') + '\n'))
+
+test('增量扫描从 baseOffset 只解后续帧', () => {
+  const f1 = frame([user(1, 'a'), user(2, 'b')])
+  const f2 = frame([user(3, 'c')])
+  const all = Buffer.concat([f1, f2])
+  let seen = []
+  const r = scanSessionFile(all.subarray(f1.length), { baseOffset: f1.length, onEvent: e => seen.push(e.seq) })
+  assert.deepEqual(seen, [3])
+  assert.ok(r.nextOffset > f1.length)
+})
+
+test('offset 不是 zstd 帧边界时 indexSessionFile 回退全量', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-index-'))
+  try {
+    const db = openDb(join(dir, 'index.sqlite'))
+    const file = join(dir, 's.v4.jsonl.zstd')
+    writeFileSync(file, frame([user(1, 'hello')]))
+    const r = indexSessionFile(db, { sessionId: 's', filePath: file, offset: 3 })
+    assert.equal(r.fallback, true)
+    assert.ok(r.scannedBytes > 0)
+    db.close()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

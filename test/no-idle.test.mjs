@@ -54,7 +54,7 @@ test('turn-stopping 且上一轮超过 24h：不再触发 idle24h 聚合', { tim
       const rows = check.db.prepare("SELECT kind, detail FROM journal").all()
       assert.equal(rows.some(r => r.kind === 'aggregate-trigger' && JSON.parse(r.detail).turn === 'idle24h'), false)
     } finally { check.close() }
-    assert.equal(tools.length, 4)
+    assert.equal(tools.length, 5)
   } finally {
     dispose()
     if (oldHome === undefined) delete process.env.DSH_HOME

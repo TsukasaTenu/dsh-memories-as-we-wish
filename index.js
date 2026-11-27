@@ -10,7 +10,8 @@
  */
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import { appendFileSync, mkdirSync, statfsSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, statfsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { openDb } from './lib/db.js'
 import { answerQuery, buildAndIndexEpisodes, findSessionEntry, indexSessionFile, listSessionEntries } from './lib/pipeline.js'
@@ -19,6 +20,9 @@ import { buildAndIndexEpisodesLLM } from './lib/aggregate.js'
 import { searchView, readView } from './lib/memory-tools.js'
 import { relinkView } from './lib/relink.js'
 import { reposeView } from './lib/repose.js'
+import { redatingView } from './lib/redating.js'
+import { ensureDayMainlines } from './lib/day-mainline.js'
+import { ensureMonthThemes } from './lib/month-themes.js'
 import { migrate, getProfile } from './lib/store.js'
 import { applyEpisode, applyScene, buildIncrementalPrompt, buildScenePrompt, callExtractWithRetry, parseJsonLoose } from './lib/extract.js'
 
@@ -440,6 +444,86 @@ const log = (cfg, level, msg) => {
   try { appendFileSync(cfg.debugLog, line + '\n') } catch { /* ignore */ }
 }
 
+/** 解析 SKILL.md 的 YAML frontmatter；只支持 name/description 这类简单标量。 */
+export function parseSkillMarkdown(raw) {
+  const text = String(raw ?? '').replace(/^\uFEFF/, '')
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text)
+  if (!match) throw new Error('SKILL.md 缺少 YAML frontmatter')
+  const fields = {}
+  for (const line of match[1].split(/\r?\n/)) {
+    const at = line.indexOf(':')
+    if (at <= 0) continue
+    const key = line.slice(0, at).trim()
+    let value = line.slice(at + 1).trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    fields[key] = value
+  }
+  const name = fields.name
+  const description = fields.description
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(String(name ?? ''))) throw new Error('SKILL.md 的 name 不是 kebab-case')
+  if (!description) throw new Error('SKILL.md 缺少 description')
+  return { name, description, content: match[2].trim() }
+}
+
+let rememberingSkillDefinition
+/** 读取插件自带的记忆技能；内容只读，不在运行时改写。 */
+export function readRememberingSkill() {
+  if (!rememberingSkillDefinition) {
+    const path = fileURLToPath(new URL('./skills/use-my-memory-abilities/SKILL.md', import.meta.url))
+    const definition = parseSkillMarkdown(readFileSync(path, 'utf8'))
+    if (definition.name !== 'use-my-memory-abilities') throw new Error(`技能名应为 use-my-memory-abilities，实际 ${definition.name}`)
+    rememberingSkillDefinition = { ...definition, path }
+  }
+  return rememberingSkillDefinition
+}
+
+/**
+ * 把 use-my-memory-abilities 注册进 DSH 的 skill registry。
+ * 选择运行时注册（B）：不写用户的 ~/.dsh/skills，技能随包版本走，DSH 重启后由插件重新注册。
+ */
+export function registerRememberingSkill(ctx, handle) {
+  let registered = false
+  let definition
+  try {
+    definition = readRememberingSkill()
+  } catch (error) {
+    safeJournal(handle, 'skill-register-failed', { name: 'use-my-memory-abilities', error: String(error?.message ?? error) })
+    return null
+  }
+  try {
+    ctx.inject(['skills'], (scope) => {
+      if (registered) return
+      const skills = scope?.skills
+      if (!skills?.register) {
+        safeJournal(handle, 'skill-register-failed', { name: definition.name, error: 'skills.register 不可用' })
+        return
+      }
+      try {
+        skills.register({
+          name: definition.name,
+          description: definition.description,
+          content: definition.content,
+          source: 'plugin:dsh-memories-as-we-wish',
+          path: definition.path,
+        })
+        registered = true
+        safeJournal(handle, 'skill-registered', {
+          name: definition.name,
+          source: 'plugin:dsh-memories-as-we-wish',
+          path: definition.path,
+        })
+      } catch (error) {
+        safeJournal(handle, 'skill-register-failed', { name: definition.name, error: String(error?.message ?? error) })
+      }
+    })
+  } catch (error) {
+    safeJournal(handle, 'skill-register-failed', { name: definition.name, error: String(error?.message ?? error) })
+  }
+  return definition
+}
+
 export function apply(ctx, config = {}) {
   const cfg = { ...DEFAULTS, ...config, debugLog: config.debugLog || process.env.DSH_V2_DEBUG_LOG || '' }
   if (!cfg.enabled) return
@@ -468,6 +552,7 @@ export function apply(ctx, config = {}) {
     log(cfg, 'warn', `agg retry migration 跳过（已忽略）：${String(error?.message ?? error)}`)
   }
   log(cfg, 'info', `v2 已启用；db=${dbPath} sessionsRoot=${sessionsRoot}`)
+  registerRememberingSkill(ctx, handle)
 
   // 只在 debugLog 打开时采样；用于确认长队列/全终端扫描是否持续抬升堆。
   const logMemory = (label) => {
@@ -486,7 +571,7 @@ export function apply(ctx, config = {}) {
   const activeAgents = new Set()
   const agentRegisterCounts = new Map()
   const toolsSchemasSeen = new Map()
-  const MEMORY_TOOL_NAMES = ['memory_recall', 'memory_remember', 'memory_relink', 'memory_repose']
+  const MEMORY_TOOL_NAMES = ['memory_recall', 'memory_remember', 'memory_relink', 'memory_repose', 'memory_redating']
   const debugJournal = (kind, detail) => {
     if (cfg.debugTools) safeJournal(handle, kind, detail)
   }
@@ -674,6 +759,7 @@ export function apply(ctx, config = {}) {
   // 之前只按 session 去重；不同会话仍可能同时各跑一份 LLM prompt，
   // 在系统 commit 紧张时放大内存峰值。现在始终只有一个聚合在跑。
   const runSerial = createSerialGate()
+  const settling = new Set()
 
   // 常驻回填状态。断点=库里还有没整理完的段，重启后按库续跑。
   const backfill = {
@@ -910,10 +996,36 @@ export function apply(ctx, config = {}) {
       if (backfill.timer) return
       backfill.timer = setInterval(() => {
         backfillTick().catch((error) => log(cfg, 'warn', `backfill 异常：${String(error?.message ?? error)}`))
+        dayMainlineTick().catch((error) => log(cfg, 'warn', `day-mainline 异常：${String(error?.message ?? error)}`))
       }, Math.max(5_000, Number(cfg.backfillIntervalMs) || 30_000))
       if (typeof backfill.timer.unref === 'function') backfill.timer.unref()
     }
     setTimeout(startTimer, 10_000)
+  }
+
+  let dayMainlineRunning = false
+  async function dayMainlineTick() {
+    if (!cfg.backfillEnabled || !llmRef || dayMainlineRunning) return
+    if (isAnyTurnActive()) return
+    if (Date.now() < backfill.pauseUntil) return
+    dayMainlineRunning = true
+    try {
+      const r = await ensureDayMainlines(handle, llmRef, {
+        limit: 3,
+        timeoutMs: Number(cfg.aggregateCallTimeoutMs) || 90_000,
+        journal: (kind, detail) => handle.journal(kind, detail),
+        log: (msg) => log(cfg, 'info', msg),
+      })
+      if (r?.total) handle.journal('day-mainline-progress', r)
+      await ensureMonthThemes(handle, llmRef, {
+        limit: 1,
+        timeoutMs: Number(cfg.aggregateCallTimeoutMs) || 90_000,
+        journal: (kind, detail) => handle.journal(kind, detail),
+        log: (msg) => log(cfg, 'info', msg),
+      })
+    } finally {
+      dayMainlineRunning = false
+    }
   }
 
   // ---------- 整个终端索引 / 首次安装全局重建 ----------
@@ -921,12 +1033,24 @@ export function apply(ctx, config = {}) {
   const indexSessionEntry = (entry) => {
     const id = entry.sessionId
     if (entry.isSubagent || subagentIds.has(id)) return { added: 0, lastSeq: 0 }
-    const from = lastSeq.get(id) ?? Number(handle.getMeta(`lastSeq:${id}`) ?? 0)
-    const r = indexSessionFile(handle, { sessionId: id, filePath: entry.filePath, fromSeq: from, onebotHintPatterns: cfg.onebotHintPatterns })
-    if (!r.added) return r
+    let idx = {}
+    try { idx = JSON.parse(handle.getMeta(`idx:${id}`) ?? '{}') } catch {}
+    const from = Math.max(lastSeq.get(id) ?? 0, Number(handle.getMeta(`lastSeq:${id}`) ?? 0), Number(idx.lastIndexedRawSeq) || 0)
+    const r = indexSessionFile(handle, {
+      sessionId: id, filePath: entry.filePath, fromSeq: from,
+      onebotHintPatterns: cfg.onebotHintPatterns,
+      offset: Number(idx.lastFrameOffset) || 0,
+    })
     lastSeq.set(id, r.lastSeq)
     handle.setMeta(`lastSeq:${id}`, r.lastSeq)
-    handle.journal('index', { sessionId: id, added: r.added, lastSeq: r.lastSeq, workspace: entry.workspace })
+    handle.setMeta(`idx:${id}`, JSON.stringify({
+      lastIndexedRawSeq: r.lastSeq,
+      lastFrameOffset: Number(r.nextOffset) || 0,
+      updatedAt: Date.now(),
+    }))
+    if (r.fallback) handle.journal('index-fallback', { sessionId: id, offset: Number(idx.lastFrameOffset) || 0 })
+    if (!r.added) return r
+    handle.journal('index', { sessionId: id, added: r.added, lastSeq: r.lastSeq, workspace: entry.workspace, scannedBytes: r.scannedBytes, totalBytes: r.totalBytes })
     log(cfg, 'info', `索引 ${id} +${r.added} 条（lastSeq=${r.lastSeq}, workspace=${entry.workspace}）`)
     try {
       const eps = buildAndIndexEpisodes(handle, id, { entities: cfg.entities })
@@ -1043,19 +1167,8 @@ export function apply(ctx, config = {}) {
       if (subagentIds.has(id)) return
       const entry = findSessionEntry(sessionsRoot, id)
       if (!entry) return
-      // 每次只增量扫当前会话；启动时的 terminal-index 已覆盖其它 workspace
-      const from = lastSeq.get(id) ?? Number(handle.getMeta(`lastSeq:${id}`) ?? 0)
-      const r = indexSessionFile(handle, { sessionId: id, filePath: entry.filePath, fromSeq: from, onebotHintPatterns: cfg.onebotHintPatterns })
-      if (r.added) {
-        lastSeq.set(id, r.lastSeq)
-        handle.setMeta(`lastSeq:${id}`, r.lastSeq)
-        handle.journal('index', { sessionId: id, added: r.added, lastSeq: r.lastSeq, workspace: entry.workspace })
-        log(cfg, 'info', `索引 ${id} +${r.added} 条（lastSeq=${r.lastSeq}）`)
-        try {
-          const eps = buildAndIndexEpisodes(handle, id, { entities: cfg.entities })
-          log(cfg, 'info', `episodes ${eps.length} 条（确定性，先保证可检索）`)
-        } catch (error) { log(cfg, 'warn', `episodes 构建失败：${String(error?.message ?? error)}`) }
-      }
+      // 每次只增量扫当前会话（文件字节偏移 + rawSeq 双断点）
+      indexSessionEntry(entry)
     } catch (error) {
       log(cfg, 'warn', `索引失败：${String(error?.message ?? error)}`)
     }
@@ -1069,6 +1182,22 @@ export function apply(ctx, config = {}) {
       if (typeof t.unref === 'function') t.unref()
       indexTimers.add(t)
     }
+  }
+
+  const runSettle = (agent, mode, turn) => {
+    const id = agent?.session?.header?.id
+    if (!id || settling.has(id)) return
+    settling.add(id)
+    const started = Date.now()
+    handle.journal('settle-start', { sessionId: id, mode, turn })
+    void settleNow(agent, mode, turn)
+      .catch((error) => {
+        log(cfg, 'warn', `结算异常（已忽略）：${String(error?.message ?? error)}`)
+      })
+      .finally(() => {
+        settling.delete(id)
+        handle.journal('settle-done', { sessionId: id, mode, turn, ms: Date.now() - started })
+      })
   }
 
   // 每轮结束：增量索引
@@ -1101,8 +1230,8 @@ export function apply(ctx, config = {}) {
           aggregateOnTurn(id, turnCount)   // fire-and-forget
         }
       }
-      if (sceneDue) await settleNow(payload.agent, 'scene', turn)
-      else if (incDue) await settleNow(payload.agent, 'incremental', turn)
+      if (sceneDue) runSettle(payload.agent, 'scene', turn)
+      else if (incDue) runSettle(payload.agent, 'incremental', turn)
     } catch (error) {
       log(cfg, 'warn', `结算异常（已忽略）：${String(error?.message ?? error)}`)
     }
@@ -1160,6 +1289,9 @@ export function apply(ctx, config = {}) {
     ctx.on('agent/disposed', ({ agent } = {}) => {
       if (agent) activeAgents.delete(agent)
     })
+    ctx.on('dispose', () => {
+      for (const id of settling) handle.journal('settle-abandoned', { sessionId: id })
+    })
   } catch (error) {
     log(cfg, 'warn', `agent 工具监听失败：${String(error?.message ?? error)}`)
   }
@@ -1175,6 +1307,7 @@ export function apply(ctx, config = {}) {
       memory_remember: !!toolsSvc?.get?.('memory_remember'),
       memory_relink: !!toolsSvc?.get?.('memory_relink'),
       memory_repose: !!toolsSvc?.get?.('memory_repose'),
+      memory_redating: !!toolsSvc?.get?.('memory_redating'),
     })
     const hasGet = typeof toolsSvc?.get
     const scopeHasRegister = typeof toolsSvc?.register
@@ -1201,6 +1334,7 @@ export function apply(ctx, config = {}) {
           to: { type: 'string', description: '可选，结束日期（含），格式 YYYY-MM-DD' },
           limit: { type: 'string', description: '条数 1–50，默认 20（最多 50）' },
           tail: { type: 'integer', description: 'tail：可选。除了最相关的那几条之外，还想再看一些较弱的候选时填这个数（默认 10，最多 50）。它们只有时间、编号、完整摘要和一句正文选段，没有完整正文。' },
+          kind: { type: 'string', description: '可选。指定之后，这一类记忆在排名上会稍微靠前一点——比如想找那次约定可以传 promise，想找关于对方的事实可以传 fact。不传就不加权。' },
         },
         required: [],
       },
@@ -1263,7 +1397,25 @@ export function apply(ctx, config = {}) {
         return journalToolCall(handle, 'memory_repose', args, () => reposeView(handle, args), cfg.debugTools)
       },
     }
-    toolDefs = [searchTool, readTool, relinkTool, reposeTool]
+    const redatingTool = {
+      name: 'memory_redating',
+      description: '我的记忆标尺。当我想知道过去都发生过什么、哪些日子值得翻回去看的时候，用它。它会告诉我我们在哪些日子留下过记忆，每天一句话；最近的展开，更早的按月折叠。它不是回忆本身，是地图——先看有哪些日子，再用 memory_recall 去那些日子里找。',
+      parameters: {
+        type: 'object',
+        properties: {
+          from: { type: 'string', description: '可选，起始日期（含），格式 YYYY-MM-DD' },
+          to: { type: 'string', description: '可选，结束日期（含），格式 YYYY-MM-DD' },
+          limit: { type: 'integer', description: '可选，展开最近多少天，默认 30，范围 1–90' },
+          month: { type: 'string', description: '可选，看某个月的每日摘要，格式 YYYY-MM' },
+        },
+        required: [],
+      },
+      output: { schema: { type: 'string' }, render: (_a, value) => [{ type: 'text', text: String(value ?? '') }] },
+      async execute(args) {
+        return journalToolCall(handle, 'memory_redating', args, () => redatingView(handle, args), cfg.debugTools)
+      },
+    }
+    toolDefs = [searchTool, readTool, relinkTool, reposeTool, redatingTool]
     ensureGlobalTools('inject')
     debugJournal('tools-diag', { phase: 'after', post: presence() })
     // 已存在的 agent（例如插件后加载/热重载）也补一份，不等下一轮。
