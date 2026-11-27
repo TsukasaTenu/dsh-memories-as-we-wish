@@ -1405,8 +1405,8 @@ export function apply(ctx, config = {}) {
         properties: {
           from: { type: 'string', description: '可选，起始日期（含），格式 YYYY-MM-DD' },
           to: { type: 'string', description: '可选，结束日期（含），格式 YYYY-MM-DD' },
-          limit: { type: 'integer', description: '可选，展开最近多少天，默认 30，范围 1–90' },
-          month: { type: 'string', description: '可选，看某个月的每日摘要，格式 YYYY-MM' },
+          limit: { type: 'integer', description: '可选，展开最近多少天，默认 30，范围 1–90；带 month 时忽略' },
+          month: { type: 'string', description: '可选，看某个月的每日摘要，格式 YYYY-MM；整月展开' },
         },
         required: [],
       },

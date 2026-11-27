@@ -166,13 +166,31 @@ test('simplified episodes are excluded even when the cache was just filled', () 
   })
 })
 
-test('month header reports real day count, then says how many are shown', () => {
+test('month view ignores limit and expands the whole month', () => {
   withDb((h) => {
     for (let i = 1; i <= 10; i++) {
       const day = `2026-10-${String(i).padStart(2, '0')}`
       seed(h, day, { aggTitle: `十月第${i}天`, hour: 10 })
     }
     const out = redatingView(h, { month: '2026-10', limit: 5 })
-    assert.match(out, /2026-10 · 记下 10 天 · 另记 5 天/)
+    assert.match(out, /^2026-10 · 记下 10 天(?: ·|$)/m)
+    assert.doesNotMatch(out, /显示前|另记/)
+    assert.equal((out.match(/^2026-10-\d{2} · /gm) ?? []).length, 10)
+  })
+})
+
+test('normal view still honours limit and clamps it to 90', () => {
+  withDb((h) => {
+    let day = '2025-01-01'
+    for (let i = 0; i < 100; i++) {
+      seed(h, day, { aggTitle: `第${i}天`, hour: 10 })
+      const [y, m, d] = day.split('-').map(Number)
+      const next = new Date(y, m - 1, d + 1)
+      day = localDayKey(next.getTime())
+    }
+    const five = redatingView(h, { limit: 5 })
+    assert.equal((five.match(/^2025-\d{2}-\d{2} · /gm) ?? []).length, 5)
+    const many = redatingView(h, { limit: 200 })
+    assert.equal((many.match(/^2025-\d{2}-\d{2} · /gm) ?? []).length, 90)
   })
 })
