@@ -1399,7 +1399,7 @@ export function apply(ctx, config = {}) {
     }
     const redatingTool = {
       name: 'memory_redating',
-      description: '我的记忆标尺。当我想知道过去都发生过什么、哪些日子值得翻回去看的时候，用它。它会告诉我我们在哪些日子留下过记忆，每天一句话；最近的展开，更早的按月折叠。它不是回忆本身，是地图——先看有哪些日子，再用 memory_recall 去那些日子里找。',
+      description: '我的记忆标尺。当我想知道过去都发生过什么、哪些日子值得翻回去看的时候，用它。它会告诉我我们在哪些日子留下过记忆：最近的日子一天一段，下面还列着那天几个片段；更早的按月折成几句。它不是回忆本身，是地图——先看有哪些日子，再用 memory_recall 去那些日子里找。',
       parameters: {
         type: 'object',
         properties: {
