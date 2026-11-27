@@ -1,6 +1,6 @@
 {
   "name": "dsh-memories-as-we-wish",
-  "version": "1.0.38",
+  "version": "1.0.39",
   "description": "Long-term memory for AI characters: LLM episode summaries + two-tier retrieval + cue-triggered recall.",
   "license": "MIT",
   "author": "天雨 つかさ & 爱慕织姬",
